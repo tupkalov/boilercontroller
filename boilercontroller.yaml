@@ -1,0 +1,283 @@
+esphome:
+  name: boilercontroller
+  platform: ESP32
+  board: esp-wrover-kit
+  on_boot:
+    priority: 500
+    then:
+    - logger.log: "Boot"
+    - delay: 5s
+    - if:
+        condition:
+          binary_sensor.is_on: boiler_status
+        then:
+          script.execute: long_stop
+
+
+# Enable logging
+logger:
+  level: DEBUG
+  #baud_rate: 0 # disable uart logger on esp 8266
+
+# Enable Home Assistant API
+api:
+  password: ""
+
+ota:
+  password: ""
+
+wifi:
+  # ssid: "Rubli"
+  # password: "12345678"
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Sim800Test Fallback"
+    password: "F6x7Ohtsb4Fd"
+    
+switch:
+# Включение сим модуля
+- platform: gpio
+  id: "key_pin"
+  pin: 4
+  restore_mode: ALWAYS_OFF
+- platform: gpio
+  id: "reset_pin"
+  pin: 5
+  restore_mode: ALWAYS_ON
+- platform: gpio
+  id: "power_pin"
+  pin: 23
+  restore_mode: ALWAYS_ON
+
+# Вывод на триггер
+- platform: gpio
+  pin:
+    number: 33
+    inverted: true
+  id: trigger_boiler
+  on_turn_on:
+  - delay: 100ms
+  - switch.turn_off: trigger_boiler
+
+## BLINK
+# - platform: template
+#   name: "Statuser"
+#   optimistic: yes
+#   id: redtemp
+#   lambda: |-
+#     return true;
+#   turn_on_action:
+#   - while:
+#       condition:
+#         lambda: 'return true;'
+#       then:
+#       - logger.log:
+#           format: "Status: %s"
+#           args: ['id(boiler_status).state ? "ON" : "OFF"']
+#       - delay: 5s
+
+
+binary_sensor:
+- platform: gpio
+  id: boiler_status
+  name: "Boiler status"
+  device_class: running
+  pin:
+    number: GPIO25
+    mode: 
+      input: true
+      pulldown: true
+  # on_state:
+  # - logger.log: 
+  #     format: "State event. Status: %s"
+  #     args: ['id(boiler_status).state ? "ON" : "OFF"']
+  # - if:
+  #     condition:
+  #       for:
+  #         time: 5000ms
+  #         condition:
+  #           binary_sensor.is_on: boiler_status
+  #     then:
+  #       - logger.log: "Stop boiler due to long working"
+  #       - script.execute: stop_boiler
+  # on_press:
+  # - if:
+  #     condition:
+  #       for:
+  #         time: 5000ms
+  #         condition:
+  #           lambda: |-
+  #             return id(boiler_status).state;
+  #     then:
+  #     - lambda: |-
+  #         ESP_LOGD("main", "----------SUCCESS");
+  #     else:
+  #     - lambda: |-
+  #         ESP_LOGD("main", "----------FAIL");
+  # - logger.log: 'press event' 
+  # - script.execute: long_stop
+  # on_release:
+  # - logger.log: 'release event' 
+  # - script.stop: long_stop
+interval:
+  - interval: 10s
+    then:
+      - if:
+          condition:
+            for:
+              time: 5000ms
+              condition:
+                lambda: |-
+                  return id(boiler_status).state;
+          then:
+            - script.execute: stop_boiler
+
+
+
+text_sensor:
+- platform: template
+  id: sms_sender
+  name: "Sms Sender"
+
+script:
+- id: run_boiler
+  mode: restart
+  then:
+    - repeat:
+        count: 5
+        then:
+        - if:
+            condition:
+              binary_sensor.is_off: boiler_status
+            then:
+              - switch.turn_on: trigger_boiler
+              - delay: 1s
+            else:
+              - script.stop: run_boiler
+- id: stop_boiler
+  mode: restart
+  then:
+    - repeat:
+        count: 5
+        then:
+        - if:
+            condition:
+              binary_sensor.is_on: boiler_status
+            then:
+              - switch.turn_on: trigger_boiler
+              - delay: 1s
+            else:
+              - script.stop: stop_boiler
+- id: long_stop
+  then:
+  - delay: 5min
+  - logger.log: "Stop boiler due to long working"
+  - script.execute: stop_boiler
+
+
+uart:
+  baud_rate: 9600
+  tx_pin: 27
+  rx_pin: 26
+
+sim800l:
+  on_sms_received:
+    then:
+    - logger.log:
+        format: "Received '%s' from %s"
+        args: [ 'message.c_str()', 'sender.c_str()' ]
+    - if:
+        condition:
+          lambda: |-
+            return message == "garey" || message == "Garey";
+        then:
+          - if:
+              # если уже включен то отправляем ответ что уже включен
+              condition:
+                binary_sensor.is_on: boiler_status
+              then:
+                - sim800l.send_sms:
+                    recipient: !lambda |-
+                      return sender;
+                    message: !lambda |-
+                      return "Boiler already GAREY";
+              # Запускаем бойлер
+              else:
+                - script.execute: run_boiler
+                - wait_until:
+                    or:
+                      - not:
+                          script.is_running: run_boiler
+                      - binary_sensor.is_on: boiler_status
+                # Проверяем что удачно запустился
+                - if:
+                    condition:
+                      binary_sensor.is_on: boiler_status
+                    then:
+                      - sim800l.send_sms:
+                          recipient: !lambda |-
+                            return sender;
+                          message: !lambda |-
+                            return "Boiler GAREY!";
+                    # Не смог запустится
+                    else:
+                      - sim800l.send_sms:
+                          recipient: !lambda |-
+                            return sender;
+                          message: !lambda |-
+                            return "Boiler GAREY error";
+
+
+    - if:
+        condition:
+          lambda: |-
+            return message == "negarey" || message == "Negarey";
+        then:
+          - if:
+              # если уже включен то отправляем ответ что уже выключен
+              condition:
+                binary_sensor.is_off: boiler_status
+              then:
+                - sim800l.send_sms:
+                    recipient: !lambda |-
+                      return sender;
+                    message: !lambda |-
+                      return "Boiler already NEGAREY";
+              # Запускаем бойлер
+              else:
+                - script.execute: stop_boiler
+                - wait_until:
+                    or:
+                      - not:
+                          script.is_running: stop_boiler
+                      - binary_sensor.is_off: boiler_status
+                # Проверяем что удачно выключился
+                - if:
+                    condition:
+                      binary_sensor.is_off: boiler_status
+                    then:
+                      - sim800l.send_sms:
+                          recipient: !lambda |-
+                            return sender;
+                          message: !lambda |-
+                            return "Boiler NEGAREY!";
+                    # Не смог выключится
+                    else:
+                      - sim800l.send_sms:
+                          recipient: !lambda |-
+                            return sender;
+                          message: !lambda |-
+                            return "Boiler NEGAREY error";
+    - if:
+        condition:
+          lambda: |-
+            return message == "status" || message == "Status";
+        then:
+        - sim800l.send_sms:
+            recipient: !lambda |-
+              return sender;
+            message: !lambda |-
+              return id(boiler_status).state ? "Boiler GAREY now" : "Boiler NEGAREY now";
+      
+captive_portal:
