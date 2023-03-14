@@ -34,7 +34,7 @@ wifi:
 mqtt:
   broker: rpi.tupkalov.ru
   username: garey
-  password: GareY434849
+  password: changeme
   port: 31255
   id: mqtt_client
 
