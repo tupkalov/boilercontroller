@@ -2,9 +2,9 @@ esphome:
   name: boilercontroller
   platform: ESP32
   board: esp-wrover-kit
-  includes:
-    - IP5306Sensor.h
-    - IP5306.h
+  # includes:
+  #   - IP5306Sensor.h
+  #   - IP5306.h
   # on_boot:
   #   priority: 500
   #   then:
@@ -16,20 +16,57 @@ logger:
   #baud_rate: 0 # disable uart logger on esp 8266
 
 # Enable Home Assistant API
-api:
-  password: ""
+# api:
+  # password: ""
 
 ota:
   password: ""
 
 wifi:
-  # ssid: "Rubli"
-  # password: "12345678"
+  ssid: "ZAHORONENIE_254"
+  password: "1234567890"
 
   # Enable fallback hotspot (captive portal) in case wifi connection fails
   ap:
     ssid: "Sim800Test Fallback"
     password: "F6x7Ohtsb4Fd"
+  
+mqtt:
+  broker: rpi.tupkalov.ru
+  username: garey
+  password: GareY434849
+  port: 31255
+  id: mqtt_client
+
+  on_message:
+    - topic: garage/boiler/start
+      then:
+      - if:
+          # если уже включен то отправляем ответ что уже включен
+          condition:
+            binary_sensor.is_off: boiler_status
+          then:
+            - script.execute: run_boiler
+            - wait_until:
+                or:
+                  - not:
+                      script.is_running: run_boiler
+                  - binary_sensor.is_on: boiler_status
+
+    - topic: garage/boiler/stop
+      then:
+      - if:
+          # если уже включен то отправляем ответ что уже включен
+          condition:
+            binary_sensor.is_on: boiler_status
+          then:
+            - script.execute: stop_boiler
+            - wait_until:
+                or:
+                  - not:
+                      script.is_running: stop_boiler
+                  - binary_sensor.is_off: boiler_status
+
 i2c:
   sda: 21
   scl: 22
@@ -88,46 +125,19 @@ binary_sensor:
     mode: 
       input: true
       pulldown: true
-  # on_state:
-  # - logger.log: 
-  #     format: "State event. Status: %s"
-  #     args: ['id(boiler_status).state ? "ON" : "OFF"']
-  # - if:
-  #     condition:
-  #       for:
-  #         time: 5000ms
-  #         condition:
-  #           binary_sensor.is_on: boiler_status
-  #     then:
-  #       - logger.log: "Stop boiler due to long working"
-  #       - script.execute: stop_boiler
-  # on_press:
-  # - if:
-  #     condition:
-  #       for:
-  #         time: 5000ms
-  #         condition:
-  #           lambda: |-
-  #             return id(boiler_status).state;
-  #     then:
-  #     - lambda: |-
-  #         ESP_LOGD("main", "----------SUCCESS");
-  #     else:
-  #     - lambda: |-
-  #         ESP_LOGD("main", "----------FAIL");
-  # - logger.log: 'press event' 
-  # - script.execute: long_stop
-  # on_release:
-  # - logger.log: 'release event' 
-  # - script.stop: long_stop
-- platform: custom
-  lambda: |-
-    auto ip5306sensor = new IP5306Sensor();
-    App.register_component(ip5306sensor);
-    return {ip5306sensor->is_charge_connected, ip5306sensor->is_charge_full};
-  binary_sensors:
-  - name: "IP5306 is_charge_connected"
-  - name: "IP5306 is_charge_full"
+  on_state:
+    then:
+    - lambda: |-
+        id(mqtt_client).publish("garage/boiler/status",  id(boiler_status).state ? "ON" : "OFF");
+
+# - platform: custom
+#   lambda: |-
+#     auto ip5306sensor = new IP5306Sensor();
+#     App.register_component(ip5306sensor);
+#     return {ip5306sensor->is_charge_connected, ip5306sensor->is_charge_full};
+#   binary_sensors:
+#   - name: "IP5306 is_charge_connected"
+#   - name: "IP5306 is_charge_full"
 
 interval:
   - interval: 10s
@@ -135,21 +145,21 @@ interval:
       - if:
           condition:
             for:
-              time: 5000ms
+              time: 5h
               condition:
                 lambda: |-
                   return id(boiler_status).state;
           then:
             - script.execute: stop_boiler
-sensor:
-- platform: custom
-  lambda: |-
-    auto ip5306sensor = new IP5306Sensor();
-    App.register_component(ip5306sensor);
-    return {ip5306sensor->battery_level};
+# sensor:
+# - platform: custom
+#   lambda: |-
+#     auto ip5306sensor = new IP5306Sensor();
+#     App.register_component(ip5306sensor);
+#     return {ip5306sensor->battery_level};
 
-  sensors:
-  - name: "IP5306 battery level"
+#   sensors:
+#   - name: "IP5306 battery level"
 
 script:
 - id: run_boiler
@@ -180,11 +190,6 @@ script:
               - delay: 1s
             else:
               - script.stop: stop_boiler
-- id: long_stop
-  then:
-  - delay: 5min
-  - logger.log: "Stop boiler due to long working"
-  - script.execute: stop_boiler
 
 
 uart:
